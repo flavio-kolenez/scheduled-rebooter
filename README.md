@@ -1,21 +1,21 @@
 # Schedule Rebooter
 
-Ferramenta de linha de comando para reinicializar os servicos **TOTVS Protheus Schedule** em ordem controlada e sequencial, sem necessidade de Python instalado no servidor.
+Ferramenta de linha de comando para reinicializar os serviços **TOTVS Protheus Schedule** em ordem controlada e sequencial, sem necessidade de Python instalado no servidor.
 
 ---
 
 ## Como funciona
 
-O executavel realiza um ciclo completo de reinicio em duas fases:
+O executável realiza um ciclo completo de reinício em duas fases:
 
 ```
 DESLIGAMENTO  8 → 7 → 6 → 5 → 4 → 3 → 2 → 1 → 0 Broker
-INICIALIZACAO 0 Broker → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+INICIALIZAÇÃO 0 Broker → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 ```
 
-**Servicos alvo (em ordem de desligamento):**
+**Serviços alvo (em ordem de desligamento):**
 
-| # | Nome do servico                        |
+| # | Nome do serviço                        |
 |---|----------------------------------------|
 | 1 | 02 - Totvs Protheus Schedule 8         |
 | 2 | 02 - Totvs Protheus Schedule 7         |
@@ -27,40 +27,40 @@ INICIALIZACAO 0 Broker → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 8 | 02 - Totvs Protheus Schedule 1         |
 | 9 | 02 - TOTVS Protheus Schedule 0 Broker  |
 
-**Garantias de execucao:**
+**Garantias de execução:**
 
-- Um servico por vez, sem paralelismo.
-- So avanca para o proximo apos validar o estado esperado (`STOPPED` ou `RUNNING`).
-- Interrompe imediatamente na primeira falha, informando fase e servico exatos.
+- Um serviço por vez, sem paralelismo.
+- Só avança para o próximo após validar o estado esperado (`STOPPED` ou `RUNNING`).
+- Interrompe imediatamente na primeira falha, informando fase e serviço exatos.
 - Log detalhado por passo e resumo final.
 
 ---
 
 ## Requisitos
 
-- Windows Server com os servicos TOTVS Protheus Schedule instalados.
-- Conta com permissao de **administrador local** (o executavel solicita elevacao UAC automaticamente).
-- Python **nao precisa** estar instalado no servidor.
+- Windows Server com os serviços TOTVS Protheus Schedule instalados.
+- Conta com permissão de **administrador local** (o executável solicita elevação UAC automaticamente).
+- Python **não precisa** estar instalado no servidor.
 
 ---
 
-## Execucao
+## Execução
 
 Copie `schedule-rebooter.exe` para o servidor e execute via PowerShell ou Prompt de Comando.
 
-**Uso basico:**
+**Uso básico:**
 
 ```powershell
 .\schedule-rebooter.exe
 ```
 
-**Com timeout customizado** (padrao: 60 segundos por servico):
+**Com timeout customizado** (padrão: 60 segundos por serviço):
 
 ```powershell
 .\schedule-rebooter.exe --timeout 120
 ```
 
-**Exemplo de saida esperada:**
+**Exemplo de saída esperada:**
 
 ```
 Inicio do reinicio controlado do TOTVS Protheus Schedule.
@@ -90,22 +90,22 @@ Resumo final: FALHA INTERROMPIDA. Fase: DESLIGAMENTO | Servico: '...' | Motivo: 
 
 ---
 
-## Codigos de saida
+## Códigos de saída
 
-| Codigo | Significado                                              |
+| Código | Significado                                              |
 |--------|----------------------------------------------------------|
-| `0`    | Sucesso total — todos os servicos reiniciados            |
-| `1`    | Nao executado como administrador                         |
-| `2`    | Falha geral de servico ou comando                        |
-| `3`    | Falha interrompida com fase e servico identificados      |
+| `0`    | Sucesso total — todos os serviços reiniciados            |
+| `1`    | Não executado como administrador                         |
+| `2`    | Falha geral de serviço ou comando                        |
+| `3`    | Falha interrompida com fase e serviço identificados      |
 
 ---
 
-## Gerando um novo executavel
+## Gerando um novo executável
 
-Necessario quando houver alteracoes em `index.py` ou `names.py`.
+Necessário quando houver alterações em `index.py` ou `names.py`.
 
-**Prerequisito:** Python 3.10+ e o ambiente virtual configurado localmente.
+**Pré-requisito:** Python 3.10+ e o ambiente virtual configurado localmente.
 
 ### Passo a passo
 
@@ -127,25 +127,83 @@ python -m pip install --upgrade pyinstaller
 Remove-Item -Recurse -Force .\build, .\dist -ErrorAction SilentlyContinue
 ```
 
-4. Gere o novo executavel:
+4. Gere o novo executável:
 
 ```powershell
 python -m PyInstaller --onefile --name schedule-rebooter --uac-admin index.py
 ```
 
-O executavel sera gerado em `dist\schedule-rebooter.exe`.
+O executável será gerado em `dist\schedule-rebooter.exe`.
 
-### Build reproduzivel com .spec
+### Build reproduzível com .spec
 
-O arquivo `schedule-rebooter.spec` esta versionado e reflete as opcoes de build atuais.
-Para reconstruir sem precisar passar os parametros manualmente:
+O arquivo `schedule-rebooter.spec` está versionado e reflete as opções de build atuais.
+Para reconstruir sem precisar passar os parâmetros manualmente:
 
 ```powershell
 python -m PyInstaller schedule-rebooter.spec
 ```
 
-> As pastas `build/` e `dist/` estao no `.gitignore` e nao devem ser commitadas.
-> Apenas o `.spec` e o codigo-fonte sao versionados.
+> As pastas `build/` e `dist/` estão no `.gitignore` e não devem ser commitadas.
+> Apenas o `.spec` e o código-fonte são versionados.
+
+---
+
+## Testes locais
+
+Para testar o script sem os serviços reais do TOTVS, existe um ambiente de teste que cria 9 serviços dummy com os mesmos nomes.
+
+### Pré-requisitos
+
+- Python instalado localmente com o ambiente virtual configurado (`.venv`).
+- PowerShell rodando **como Administrador**.
+- `dummy_service.exe` compilado (instruções abaixo).
+
+### 1. Compilar o serviço dummy
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m PyInstaller --onefile --name dummy_service --uac-admin `
+  --hidden-import win32timezone --hidden-import servicemanager `
+  --distpath tests\dist --workpath tests\build tests\dummy_service.py
+```
+
+O executável será gerado em `tests\dist\dummy_service.exe`.
+
+### 2. Criar e iniciar os serviços dummy
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\tests\setup_services.ps1
+```
+
+Confirme que todos estão em execução:
+
+```powershell
+Get-Service "02 - Totvs Protheus Schedule*", "02 - TOTVS Protheus Schedule 0 Broker" | Select-Object Name, Status
+```
+
+### 3. Executar o script
+
+```powershell
+.\dist\schedule-rebooter.exe
+```
+
+### 4. Limpar o ambiente após os testes
+
+```powershell
+.\tests\teardown_services.ps1
+```
+
+> **Observação:** Os serviços dummy requerem que o `dummy_service.exe` seja um executável **standalone compilado com PyInstaller** — não é possível usar `python.exe` diretamente como binário de serviço porque o Windows Services (LocalSystem) não tem acesso ao Python instalado em `AppData` do usuário.
+
+---
+
+## TODO
+
+- Documentar quais erros indicam travamento dos serviços (padrões de mensagem, códigos, contexto).
+- Implementar leitura do arquivo `error.log` para identificar erros de travamento automaticamente.
+- Executar a reinicialização de forma condicional, acionada pelos erros encontrados no `error.log`.
 
 ---
 
@@ -153,9 +211,9 @@ python -m PyInstaller schedule-rebooter.spec
 
 ```
 schedule-rebooter/
-├── index.py                  # Logica principal de reinicio
-├── names.py                  # Listas de servicos em ordem de desligamento e inicializacao
-├── schedule-rebooter.spec    # Configuracao de build do PyInstaller
+├── index.py                  # Lógica principal de reinício
+├── names.py                  # Listas de serviços em ordem de desligamento e inicialização
+├── schedule-rebooter.spec    # Configuração de build do PyInstaller
 ├── .gitignore
 └── README.md
 ```
