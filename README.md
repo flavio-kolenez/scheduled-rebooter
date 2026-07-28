@@ -60,6 +60,54 @@ Copie `schedule-rebooter.exe` para o servidor e execute via PowerShell ou Prompt
 .\schedule-rebooter.exe --timeout 120
 ```
 
+### Opcao alternativa: rebooter.bat
+
+Além do executável Python, o projeto inclui um script Batch para reinicialização sequencial:
+
+```bat
+rebooter.bat
+```
+
+Esse script:
+
+- Para e inicia os serviços na mesma ordem do fluxo principal.
+- Aguarda confirmação de estado (`Stopped` e `Running`) antes de seguir para o próximo.
+- Registra logs detalhados por execução em `logs\rebooter_YYYYMMDD_HHMMSS.log`.
+- Interrompe a execução na primeira falha.
+
+**Execução manual (operacional):**
+
+1. Abra o Prompt de Comando ou PowerShell como **Administrador**.
+2. Acesse a pasta do projeto:
+
+```powershell
+cd C:\caminho\para\schedule-rebooter
+```
+
+3. Execute:
+
+```powershell
+.\rebooter.bat
+```
+
+### Uso com Agendador de Tarefas (Task Scheduler)
+
+Para execução automática diária, configure a tarefa para chamar o Batch.
+
+**Configuração recomendada da ação:**
+
+- Program/script: `cmd.exe`
+- Add arguments: `/c C:\caminho\para\schedule-rebooter\rebooter.bat`
+- Start in: `C:\caminho\para\schedule-rebooter`
+
+**Opções importantes da tarefa:**
+
+- Marcar **Run with highest privileges**.
+- Usar conta com permissão para controle de serviços.
+- Validar no histórico da tarefa (`Last Run Time` e `Last Task Result`).
+
+> Dica: para testar a tarefa imediatamente após criar, use **Run** no Task Scheduler e confira o arquivo mais recente da pasta `logs\`.
+
 **Exemplo de saída esperada:**
 
 ```
@@ -213,6 +261,7 @@ Get-Service "02 - Totvs Protheus Schedule*", "02 - TOTVS Protheus Schedule 0 Bro
 schedule-rebooter/
 ├── index.py                  # Lógica principal de reinício
 ├── names.py                  # Listas de serviços em ordem de desligamento e inicialização
+├── rebooter.bat              # Alternativa em Batch para execução manual ou agendada
 ├── schedule-rebooter.spec    # Configuração de build do PyInstaller
 ├── .gitignore
 └── README.md
