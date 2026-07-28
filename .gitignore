@@ -2,3 +2,10 @@
 __pycache__
 build/
 dist/
+*.exe
+
+watchdog-dbaccess/data/
+watchdog-dbaccess/logs/*.log
+watchdog-dbaccess/status/*.json
+watchdog-dbaccess/status/*.csv
+watchdog-dbaccess/backup/*.log

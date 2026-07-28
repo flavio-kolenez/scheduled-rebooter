@@ -1,0 +1,2 @@
+Esta pasta armazena o arquivo de lock (status.lock), o historico (history.csv)
+e o controle de ultima recuperacao (last_recovery.json).
