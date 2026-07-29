@@ -34,8 +34,7 @@ class NotificationPayload:
     result: str
 
     def subject(self) -> str:
-        status = "SUCESSO" if self.result.upper() == "SUCESSO" else "FALHA"
-        return f"[WatchDog DBAccess] {status} - {self.environment} - {self.rule_description}"
+        return f"[WatchDog DBAccess] {self.result.upper()} - {self.environment} - {self.rule_description}"
 
     def body_text(self) -> str:
         return (
@@ -85,38 +84,93 @@ class EmailNotifier:
 
 
 class TeamsNotifier:
-    """Envia notificacoes para um canal do Microsoft Teams via Webhook."""
+    """Envia notificacoes para um canal do Microsoft Teams via um fluxo do
+    Power Automate (URL de trigger HTTP), usando um Adaptive Card.
+    """
 
     def __init__(self, teams_config: TeamsConfig, logger) -> None:
         self.teams_config = teams_config
         self.logger = logger
 
-    def send(self, payload: NotificationPayload) -> None:
-        """Envia o cartao de notificacao ao Teams, se o Webhook estiver habilitado."""
-        if not self.teams_config.enabled or not self.teams_config.webhook_url:
-            return
+    @staticmethod
+    def _build_card(payload: NotificationPayload) -> dict:
+        result_upper = payload.result.upper()
+        is_alert = result_upper == "ALERTA"
+        is_success = result_upper == "SUCESSO"
 
-        card = {
-            "@type": "MessageCard",
-            "@context": "http://schema.org/extensions",
-            "themeColor": "00A651" if payload.result.upper() == "SUCESSO" else "FF0000",
-            "summary": payload.subject(),
-            "sections": [
+        if is_alert:
+            emoji, color = "🔔", "Warning"
+        elif is_success:
+            emoji, color = "✅", "Good"
+        else:
+            emoji, color = "⚠️", "Attention"
+
+        if is_alert:
+            detail_text = (
+                f"**Ambiente:** {payload.environment}  \n"
+                f"**Erro identificado:** {payload.error_line}  \n"
+                f"**Observacao:** nenhuma acao automatica foi executada para esta regra "
+                f"(acao=NOTIFICAR). Verificacao manual recomendada."
+            )
+            facts = [
+                {"title": "Servidor", "value": payload.server},
+                {"title": "Data/Hora", "value": payload.timestamp},
+            ]
+        else:
+            detail_text = (
+                f"**Ambiente:** {payload.environment}  \n"
+                f"**Erro identificado:** {payload.error_line}  \n"
+                f"**Acao executada:** {payload.action}  \n"
+                f"**Resultado:** {payload.result}"
+            )
+            facts = [
+                {"title": "Servidor", "value": payload.server},
+                {"title": "Data/Hora", "value": payload.timestamp},
+                {"title": "Tempo de recuperacao", "value": f"{payload.recovery_seconds:.1f}s"},
+            ]
+
+        return {
+            "type": "message",
+            "attachments": [
                 {
-                    "activityTitle": payload.subject(),
-                    "facts": [
-                        {"name": "Ambiente", "value": payload.environment},
-                        {"name": "Servidor", "value": payload.server},
-                        {"name": "Data/Hora", "value": payload.timestamp},
-                        {"name": "Regra", "value": payload.rule_description},
-                        {"name": "Erro", "value": payload.error_line},
-                        {"name": "Acao", "value": payload.action},
-                        {"name": "Tempo de recuperacao", "value": f"{payload.recovery_seconds:.1f}s"},
-                        {"name": "Resultado", "value": payload.result},
-                    ],
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "type": "AdaptiveCard",
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "version": "1.2",
+                        "body": [
+                            {
+                                "type": "TextBlock",
+                                "text": f"{emoji} WatchDog DBAccess - {payload.rule_description}",
+                                "size": "Large",
+                                "weight": "Bolder",
+                                "color": color,
+                                "wrap": True,
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": detail_text,
+                                "wrap": True,
+                                "size": "Medium",
+                            },
+                            {
+                                "type": "FactSet",
+                                "separator": True,
+                                "spacing": "Medium",
+                                "facts": facts,
+                            },
+                        ],
+                    },
                 }
             ],
         }
+
+    def send(self, payload: NotificationPayload) -> None:
+        """Envia o cartao de notificacao ao Teams, se o fluxo estiver habilitado."""
+        if not self.teams_config.enabled or not self.teams_config.webhook_url:
+            return
+
+        card = self._build_card(payload)
 
         request = urllib.request.Request(
             self.teams_config.webhook_url,

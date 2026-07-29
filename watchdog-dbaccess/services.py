@@ -58,6 +58,7 @@ class ServiceController:
             check=False,
             encoding="cp1252",
             errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
     def get_state(self, service_name: str) -> str:
@@ -274,8 +275,12 @@ class RecoveryOrchestrator:
                 self.validate_services(services)
             elif action == "SOMENTE_LOG":
                 self._log("Acao configurada como SOMENTE_LOG: nenhuma acao de recuperacao executada.")
-            elif action == "EXECUTAR_SCRIPT":
-                self._log("Acao EXECUTAR_SCRIPT ainda nao implementada nesta versao (estrutura preparada).")
+            elif action == "NOTIFICAR":
+                self._log(
+                    "Acao configurada como NOTIFICAR: nenhuma tentativa de recuperacao sera feita, "
+                    "apenas notificacao (e-mail/Teams, conforme configurado na regra)."
+                )
+
             else:
                 raise ServiceError(f"Acao de recuperacao desconhecida: {action}")
 

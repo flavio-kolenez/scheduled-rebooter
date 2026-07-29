@@ -30,13 +30,10 @@ class Severity(Enum):
 
 class ActionType(Enum):
     """Acoes de recuperacao suportadas por uma regra."""
-    RESTART_COMPLETO = "RESTART_COMPLETO"
-    RESTART_DBACCESS = "RESTART_DBACCESS"
     RESTART_SCHEDULE = "RESTART_SCHEDULE"
     RESTART_SERVICE_GROUP = "RESTART_SERVICE_GROUP"
     SOMENTE_LOG = "SOMENTE_LOG"
-    EXECUTAR_SCRIPT = "EXECUTAR_SCRIPT"
-
+    NOTIFICAR = "NOTIFICAR"
 
 class RuleError(Exception):
     """Erro ao carregar ou aplicar uma regra de deteccao."""
@@ -54,7 +51,6 @@ class Rule:
     send_teams: bool
     only_log: bool
     auto_execute: bool
-    script_path: str = ""
     services: list[str] = field(default_factory=list)
 
     def matches(self, line: str) -> bool:
@@ -113,7 +109,6 @@ def load_rules(config: AppConfig) -> list[Rule]:
                 send_teams=section.getboolean("send_teams", fallback=False),
                 only_log=section.getboolean("only_log", fallback=False),
                 auto_execute=section.getboolean("auto_execute", fallback=False),
-                script_path=section.get("script_path", ""),
                 services=rule_services,
             )
         )

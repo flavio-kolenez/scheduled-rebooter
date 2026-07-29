@@ -23,7 +23,7 @@ import sys
 from datetime import datetime
 from typing import Optional
 
-from monitor_log import LogMonitor, RuleMatch, get_rule_by_id, load_rules
+from monitor_log import ActionType, LogMonitor, RuleMatch, get_rule_by_id, load_rules
 from notifications import NotificationPayload, NotificationService
 from services import HealthChecker, RecoveryOrchestrator, ServiceController, is_admin
 from utils import (
@@ -80,13 +80,14 @@ class WatchdogApp:
     def _handle_match(self, match: RuleMatch) -> int:
         rule = match.rule
 
-        if rule.only_log:
-            self.logger.info("Regra '%s' configurada apenas para log. Nenhuma acao executada.", rule.rule_id)
-            return 0
+        if rule.action is not ActionType.NOTIFICAR:
+            if rule.only_log:
+                self.logger.info("Regra '%s' configurada apenas para log. Nenhuma acao executada.", rule.rule_id)
+                return 0
 
-        if not rule.auto_execute:
-            self.logger.info("Regra '%s' nao possui execucao automatica habilitada.", rule.rule_id)
-            return 0
+            if not rule.auto_execute:
+                self.logger.info("Regra '%s' nao possui execucao automatica habilitada.", rule.rule_id)
+                return 0
 
         if not self.tracker.can_recover(rule.rule_id, self.config.min_recovery_interval_seconds):
             self.logger.warning(
@@ -113,7 +114,10 @@ class WatchdogApp:
         result = self.orchestrator.run(rule.action.value, simulate=self.config.simulate_mode, services=rule.services)
         self.tracker.register_recovery(rule.rule_id)
 
-        result_text = "SUCESSO" if result.success else "FALHA"
+        if rule.action is ActionType.NOTIFICAR:
+            result_text = "ALERTA"
+        else:
+            result_text = "SUCESSO" if result.success else "FALHA"
         self.history.append(
             environment=self.config.environment,
             server=self.config.server_name,
