@@ -12,6 +12,21 @@ se houver, executar a recuperação automaticamente.
 
 ## Como usar
 
+### Flags disponíveis
+
+| Flag | Recebe valor? | O que faz |
+|---|---|---|
+| `--check` | não | Executa um único ciclo de verificação: lê o log, procura erro, confirma e recupera se necessário. É o padrão (comportamento do Agendador de Tarefas). |
+| `--restart` | não | Força uma recuperação completa manual (`RESTART_COMPLETO`), ignorando o motor de regras e a leitura do log. |
+| `--status` | não | Exibe o status atual (lock, serviços, últimas recuperações) sem executar nenhuma ação. |
+| `--test-rule` | sim (`RULE_ID`) | Simula a detecção de uma regra específica do `config.ini`, sem depender do erro acontecer de verdade no log. |
+| `--execute` | não | Usado junto com `--test-rule` para executar a ação de recuperação de fato (ignora `simulate_mode`). Sem essa flag, `--test-rule` só simula. |
+| `--config` | sim (`PATH`) | Usa um `config.ini` em um caminho customizado, em vez do padrão (mesma pasta do script/`.exe`). |
+
+`--check`, `--restart`, `--status` e `--test-rule` são mutuamente exclusivos
+(só um por execução). `--execute` e `--config` podem ser combinados com
+qualquer um deles.
+
 ### 1. Configurar
 
 Edite [config.ini](config.ini):
@@ -43,16 +58,58 @@ python monitor.py --test-rule dbaccess_connection_lost
 python monitor.py --test-rule dbaccess_connection_lost --execute   # executa de fato (ignora simulate_mode)
 ```
 
-### 3. Gerar o executável e agendar
+### 3. Gerar o executável
 
 ```powershell
 python -m PyInstaller WatchDogProtheus.spec
 ```
 
-Isso gera `dist\WatchDogProtheus.exe`. No Agendador de Tarefas, configure a
-ação para chamá-lo com `--check`, marque **Run with highest privileges**, e
-defina o intervalo (ex.: a cada 30s/1min), mantendo `config.ini` na mesma
-pasta do `.exe`.
+Isso gera `dist\WatchDogProtheus.exe`. Copie o `.exe` para a pasta onde ele
+vai rodar (ex.: `watchdog-dbaccess\` na raiz) e coloque o `config.ini` **na
+mesma pasta do `.exe`** — o PyInstaller não empacota o `config.ini` junto, e
+o executável resolve o caminho de configuração a partir da pasta onde o
+`.exe` está (não da pasta onde foi gerado).
+
+### 4. Rodar o executável (equivalente ao `python monitor.py`)
+
+O `.exe` aceita exatamente os mesmos parâmetros do script Python:
+
+```powershell
+cd C:\Workspace\schecule-rebooter\watchdog-dbaccess
+
+.\WatchDogProtheus.exe --check
+.\WatchDogProtheus.exe --status
+.\WatchDogProtheus.exe --restart
+.\WatchDogProtheus.exe --test-rule dbaccess_connection_lost
+.\WatchDogProtheus.exe --test-rule dbaccess_connection_lost --execute
+```
+
+Pontos importantes sobre o `.exe`:
+
+- **Pede elevação (UAC) automaticamente.** O spec define `uac_admin=True`,
+  então o Windows sempre vai pedir "Sim" no UAC ao rodar o `.exe`, mesmo que
+  o terminal já esteja aberto como usuário comum. Não é necessário (nem
+  recomendado) já abrir o PowerShell como Administrador antes de chamá-lo.
+- **Não abre janela/console.** O build de produção usa `console=False`
+  (`WatchDogProtheus.spec`), ou seja, ele roda "invisível" — sem imprimir
+  nada na tela, com sucesso ou erro. Isso é esperado: todo o resultado real
+  fica em [logs/watchdog.log](logs/) e em `status/history.csv`. Depois de
+  rodar, confira sempre esses arquivos para saber o que aconteceu.
+- **Se nada for gravado no log após rodar**, o problema é anterior à
+  inicialização (ex.: erro de configuração, regra inválida em `config.ini`,
+  import quebrado). Para diagnosticar, edite `WatchDogProtheus.spec`
+  trocando `console=False` para `console=True`, rode
+  `python -m PyInstaller WatchDogProtheus.spec` de novo, e execute o `.exe`
+  resultante — agora com uma janela de console visível mostrando o erro real
+  (traceback). Depois de corrigir, volte `console=True` para `console=False`
+  e gere o build final.
+
+### 5. Agendar
+
+No Agendador de Tarefas do Windows, configure a ação para chamar o `.exe`
+com `--check`, marque **Run with highest privileges** (evita o prompt de UAC
+em execuções automáticas/sem usuário logado), e defina o intervalo (ex.: a
+cada 30s/1min). Garanta que `config.ini` esteja na mesma pasta do `.exe`.
 
 ## Panorama do código
 
