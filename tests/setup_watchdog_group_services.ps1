@@ -27,22 +27,22 @@ if (-not (Test-Path $dummyExe)) {
 # Mesma ordem/nomes da chave "services" em [rule:dbaccess_connection_lost] do
 # watchdog-dbaccess\config.ini.
 $services = @(
-    "TOTVS_Schedule_8",
-    "TOTVS_Schedule_7",
-    "TOTVS_Schedule_6",
-    "TOTVS_Schedule_5",
-    "TOTVS_Schedule_4",
-    "TOTVS_Schedule_3",
-    "TOTVS_Schedule_2",
-    "TOTVS_Schedule_1",
-    "TOTVS_Protheus_Rest_SSL_SmartView",
-    "TOTVS_Protheus_Rest_SSL_2",
-    "TOTVS_Protheus_Rest_SSL_1",
-    "TOTVS_Protheus_Rest_1",
-    "TOTVS_Protheus_Schedule_Broker",
-    "TOTVS_Protheus_Rest_WS_Broker_SSL",
+    "00_TOTVS_DBAccess_Slave",
     "TOTVS_Protheus_Rest_WS_Broker",
-    "00_TOTVS_DBAccess_Slave"
+    "TOTVS_Protheus_Rest_WS_Broker_SSL",
+    "TOTVS_Protheus_Schedule_Broker",
+    "TOTVS_Protheus_Rest_1",
+    "TOTVS_Protheus_Rest_SSL_1",
+    "TOTVS_Protheus_Rest_SSL_2",
+    "TOTVS_Protheus_Rest_SSL_SmartView",
+    "TOTVS_Schedule_1",
+    "TOTVS_Schedule_2",
+    "TOTVS_Schedule_3",
+    "TOTVS_Schedule_4",
+    "TOTVS_Schedule_5",
+    "TOTVS_Schedule_6",
+    "TOTVS_Schedule_7",
+    "TOTVS_Schedule_8"
 )
 
 # ── Criar servicos ────────────────────────────────────────────────────────────
