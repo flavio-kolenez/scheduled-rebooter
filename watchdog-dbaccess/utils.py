@@ -135,6 +135,32 @@ def split_csv_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def load_dotenv(env_path: Path) -> None:
+    """Carrega variaveis de um arquivo ``.env`` (formato ``CHAVE=VALOR``) para
+    o ambiente do processo atual, sem sobrescrever variaveis ja definidas
+    (ex.: definidas pelo sistema operacional ou pelo Agendador de Tarefas).
+
+    Usado para manter segredos (tokens, senhas, URLs de webhook) fora do
+    ``config.ini`` e, portanto, fora do controle de versao.
+    """
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _env(name: str, fallback: str = "") -> str:
+    """Le uma variavel de ambiente (ex.: carregada do ``.env``), com fallback."""
+    return os.environ.get(name, "").strip() or fallback
+
+
 def _get(section, key: str, fallback: str) -> str:
     if hasattr(section, "get"):
         return section.get(key, fallback)
@@ -161,6 +187,8 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
     path = Path(config_path) if config_path else _default_base_dir() / DEFAULT_CONFIG_FILENAME
     if not path.exists():
         raise ConfigError(f"Arquivo de configuracao nao encontrado: {path}")
+
+    load_dotenv(path.parent / ".env")
 
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(path, encoding="utf-8")
@@ -215,19 +243,19 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
             host=_get(smtp_section, "host", ""),
             port=int(_get(smtp_section, "port", "587") or 587),
             use_tls=_getboolean(smtp_section, "use_tls", True),
-            username=_get(smtp_section, "username", ""),
-            password=_get(smtp_section, "password", ""),
+            username=_env("WATCHDOG_SMTP_USERNAME", _get(smtp_section, "username", "")),
+            password=_env("WATCHDOG_SMTP_PASSWORD", _get(smtp_section, "password", "")),
             from_addr=_get(smtp_section, "from_addr", ""),
             to_addrs=split_csv_list(_get(smtp_section, "to_addrs", "")),
         ),
         teams=TeamsConfig(
             enabled=_getboolean(teams_section, "enabled", False),
-            webhook_url=_get(teams_section, "webhook_url", ""),
+            webhook_url=_env("WATCHDOG_TEAMS_WEBHOOK_URL", _get(teams_section, "webhook_url", "")),
         ),
         telegram=TelegramConfig(
             enabled=_getboolean(telegram_section, "enabled", False),
-            bot_token=_get(telegram_section, "bot_token", ""),
-            chat_id=_get(telegram_section, "chat_id", ""),
+            bot_token=_env("WATCHDOG_TELEGRAM_BOT_TOKEN", _get(telegram_section, "bot_token", "")),
+            chat_id=_env("WATCHDOG_TELEGRAM_CHAT_ID", _get(telegram_section, "chat_id", "")),
         ),
         log_dir=Path(logging_section.get("log_dir", "logs")),
         log_level=logging_section.get("log_level", "INFO").strip().upper(),

@@ -3,6 +3,7 @@ __pycache__
 build/
 dist/
 *.exe
+.env
 
 watchdog-dbaccess/data/
 watchdog-dbaccess/logs/*.log
