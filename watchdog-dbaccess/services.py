@@ -275,11 +275,15 @@ class RecoveryOrchestrator:
                 self.validate_services(services)
             elif action == "SOMENTE_LOG":
                 self._log("Acao configurada como SOMENTE_LOG: nenhuma acao de recuperacao executada.")
+                finished_at = time.time()
+                return RecoveryResult(True, action, started_at, finished_at, "Nenhuma acao executada (SOMENTE_LOG).")
             elif action == "NOTIFICAR":
                 self._log(
                     "Acao configurada como NOTIFICAR: nenhuma tentativa de recuperacao sera feita, "
                     "apenas notificacao (e-mail/Teams, conforme configurado na regra)."
                 )
+                finished_at = time.time()
+                return RecoveryResult(True, action, started_at, finished_at, "Nenhuma acao executada (NOTIFICAR).")
 
             else:
                 raise ServiceError(f"Acao de recuperacao desconhecida: {action}")

@@ -143,10 +143,10 @@ flowchart TD
     J -- sim --> K["Cria status.lock"]
     K --> L["Backup do console.log + limpeza de backups antigos"]
     L --> M["RecoveryOrchestrator executa a ACAO da regra"]
-    M --> M1["RESTART_COMPLETO: para Schedules -> reinicia DBAccess -> inicia Schedules -> valida tudo"]
-    M --> M2["RESTART_DBACCESS: so reinicia o DBAccess"]
-    M --> M3["RESTART_SCHEDULE: para e reinicia so os Schedules"]
-    M --> M4["RESTART_SERVICE_GROUP: para na ordem da regra ('services') -> aguarda -> inicia na ordem inversa"]
+    M --> M1["RESTART_SCHEDULE: para e reinicia os Schedules (ordem de [services].schedule_services)"]
+    M --> M2["RESTART_SERVICE_GROUP: para na ordem da regra ('services') -> aguarda -> inicia na ordem inversa"]
+    M --> M3["SOMENTE_LOG: registra no log, nenhuma acao de recuperacao"]
+    M --> M4["NOTIFICAR: dispara notificacoes (email/Teams) sem executar recuperacao"]
     M1 --> N["Health Check (se habilitado)"]
     M2 --> N
     M3 --> N

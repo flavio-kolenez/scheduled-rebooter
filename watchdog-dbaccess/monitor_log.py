@@ -49,6 +49,7 @@ class Rule:
     action: ActionType
     send_email: bool
     send_teams: bool
+    send_telegram: bool
     only_log: bool
     auto_execute: bool
     services: list[str] = field(default_factory=list)
@@ -107,6 +108,7 @@ def load_rules(config: AppConfig) -> list[Rule]:
                 action=action,
                 send_email=section.getboolean("send_email", fallback=False),
                 send_teams=section.getboolean("send_teams", fallback=False),
+                send_telegram=section.getboolean("send_telegram", fallback=False),
                 only_log=section.getboolean("only_log", fallback=False),
                 auto_execute=section.getboolean("auto_execute", fallback=False),
                 services=rule_services,

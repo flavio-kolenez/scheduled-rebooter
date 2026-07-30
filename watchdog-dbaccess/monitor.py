@@ -138,7 +138,7 @@ class WatchdogApp:
             recovery_seconds=result.duration_seconds,
             result=result_text,
         )
-        self.notifications.notify(payload, rule.send_email, rule.send_teams)
+        self.notifications.notify(payload, rule.send_email, rule.send_teams, rule.send_telegram)
 
         self.logger.info("Recuperacao finalizada. Resultado=%s Duracao=%.1fs", result_text, result.duration_seconds)
         return 0 if result.success else 2
@@ -209,13 +209,19 @@ class WatchdogApp:
 
         original_simulate = self.config.simulate_mode
         original_auto_execute = rule.auto_execute
+        original_only_log = rule.only_log
+        original_min_interval = self.config.min_recovery_interval_seconds
         try:
             self.config.simulate_mode = not force_execute
+            self.config.min_recovery_interval_seconds = 0
             rule.auto_execute = True
+            rule.only_log = False
             return self._handle_match(fake_match)
         finally:
             self.config.simulate_mode = original_simulate
+            self.config.min_recovery_interval_seconds = original_min_interval
             rule.auto_execute = original_auto_execute
+            rule.only_log = original_only_log
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:

@@ -53,6 +53,15 @@ class TeamsConfig:
 
 
 @dataclass
+class TelegramConfig:
+    """Configuracao de notificacao via Bot da API do Telegram."""
+
+    enabled: bool = False
+    bot_token: str = ""
+    chat_id: str = ""
+
+
+@dataclass
 class HealthCheckConfig:
     """Configuracao do Health Check executado apos uma recuperacao."""
 
@@ -86,6 +95,7 @@ class AppConfig:
     healthcheck: HealthCheckConfig
     smtp: SmtpConfig
     teams: TeamsConfig
+    telegram: TelegramConfig
 
     log_dir: Path
     log_level: str
@@ -177,6 +187,7 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
     healthcheck_section = parser["healthcheck"] if parser.has_section("healthcheck") else {}
     smtp_section = parser["smtp"] if parser.has_section("smtp") else {}
     teams_section = parser["teams"] if parser.has_section("teams") else {}
+    telegram_section = parser["telegram"] if parser.has_section("telegram") else {}
 
     config = AppConfig(
         config_path=path,
@@ -212,6 +223,11 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
         teams=TeamsConfig(
             enabled=_getboolean(teams_section, "enabled", False),
             webhook_url=_get(teams_section, "webhook_url", ""),
+        ),
+        telegram=TelegramConfig(
+            enabled=_getboolean(telegram_section, "enabled", False),
+            bot_token=_get(telegram_section, "bot_token", ""),
+            chat_id=_get(telegram_section, "chat_id", ""),
         ),
         log_dir=Path(logging_section.get("log_dir", "logs")),
         log_level=logging_section.get("log_level", "INFO").strip().upper(),

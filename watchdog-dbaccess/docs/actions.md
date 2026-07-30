@@ -27,7 +27,7 @@ eles só são alcançáveis via `--restart` (manual, na linha de comando).
 | Ação | O que faz | Serviços afetados | Requer chave extra? |
 |---|---|---|---|
 | `RESTART_SERVICE_GROUP` | Para, na ordem declarada, e depois inicia na ordem inversa, um grupo de serviços **customizado por regra**. Ao final, valida (`validate_services`) que todos voltaram para o estado `RUNNING`. | A lista definida na própria regra, chave `services` | Sim — `services` (obrigatória; lista separada por vírgula, ordem de **parada**) |
-| `RESTART_SCHEDULE` | Para todos os serviços Schedule (ordem inversa da lista) e depois inicia na ordem original. | A lista **global** `[services].schedule_services` (compartilhada por qualquer regra que use essa ação) | Não |
+| `RESTART_SCHEDULE` | Para todos os serviços Schedule na ordem declarada em `[services].schedule_services` (do maior índice ao Broker) e depois inicia na ordem inversa (Broker primeiro). | A lista **global** `[services].schedule_services` (compartilhada por qualquer regra que use essa ação) | Não |
 | `SOMENTE_LOG` | Não executa nenhuma ação de recuperação. Apenas registra no log que a regra foi detectada (a linha `"Acao configurada como SOMENTE_LOG..."`). Respeita `only_log`/`auto_execute` normalmente — ou seja, só chega a notificar se essas flags permitirem. | Nenhum | Não |
 | `NOTIFICAR` | Ação dedicada **apenas a notificações** (e-mail/Teams). Nunca tenta nenhuma recuperação e **ignora `only_log`/`auto_execute`** — sempre executa e dispara os canais habilitados na regra (`send_email`/`send_teams`), respeitando somente o intervalo mínimo `min_recovery_interval_seconds` (para não gerar spam). Ideal para erros que não fazem sentido "recuperar" via restart de serviço (ex.: erro de dado, como chave duplicada). O resultado exibido nas notificações é `ALERTA` (não `SUCESSO`/`FALHA`), e o card do Teams usa uma cor/texto neutros em vez do tom de "recuperação concluída". | Nenhum | Não |
 
@@ -49,6 +49,7 @@ severity = ALTA
 action = RESTART_SCHEDULE
 send_email = true
 send_teams = false
+send_telegram = false
 only_log = false
 auto_execute = true
 

@@ -13,7 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from email.message import EmailMessage
 
-from utils import SmtpConfig, TeamsConfig
+from utils import SmtpConfig, TeamsConfig, TelegramConfig
 
 
 class NotificationError(Exception):
@@ -187,15 +187,92 @@ class TeamsNotifier:
             raise NotificationError(str(exc)) from exc
 
 
+class TelegramNotifier:
+    """Envia notificacoes para um grupo/canal do Telegram via a Bot API
+    (metodo ``sendMessage``), usando formatacao Markdown.
+    """
+
+    def __init__(self, telegram_config: TelegramConfig, logger) -> None:
+        self.telegram_config = telegram_config
+        self.logger = logger
+
+    @staticmethod
+    def _build_text(payload: NotificationPayload) -> str:
+        result_upper = payload.result.upper()
+        if result_upper == "ALERTA":
+            emoji = "🔔"
+            detail = (
+                f"*Erro identificado:* {payload.error_line}\n"
+                f"*Observacao:* nenhuma acao automatica foi executada. "
+                f"Verificacao manual recomendada."
+            )
+        elif result_upper == "SUCESSO":
+            emoji = "✅"
+            detail = (
+                f"*Erro identificado:* {payload.error_line}\n"
+                f"*Acao executada:* {payload.action}\n"
+                f"*Resultado:* {payload.result}\n"
+                f"*Tempo de recuperacao:* {payload.recovery_seconds:.1f}s"
+            )
+        else:
+            emoji = "⚠️"
+            detail = (
+                f"*Erro identificado:* {payload.error_line}\n"
+                f"*Acao executada:* {payload.action}\n"
+                f"*Resultado:* {payload.result}\n"
+                f"*Tempo de recuperacao:* {payload.recovery_seconds:.1f}s"
+            )
+
+        return (
+            f"{emoji} *WatchDog DBAccess - {payload.rule_description}*\n"
+            f"*Ambiente:* {payload.environment}\n"
+            f"{detail}\n"
+            f"*Servidor:* {payload.server}\n"
+            f"*Data/Hora:* {payload.timestamp}"
+        )
+
+    def send(self, payload: NotificationPayload) -> None:
+        """Envia a mensagem de notificacao ao Telegram, se o bot estiver habilitado."""
+        if not self.telegram_config.enabled or not self.telegram_config.bot_token or not self.telegram_config.chat_id:
+            return
+
+        data = {
+            "chat_id": self.telegram_config.chat_id,
+            "text": self._build_text(payload),
+            "parse_mode": "Markdown",
+        }
+        url = f"https://api.telegram.org/bot{self.telegram_config.bot_token}/sendMessage"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(data).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15):
+                pass
+            self.logger.info("Notificacao enviada ao Telegram.")
+        except (urllib.error.URLError, TimeoutError) as exc:
+            self.logger.error("Falha ao enviar notificacao ao Telegram: %s", exc)
+            raise NotificationError(str(exc)) from exc
+
+
 class NotificationService:
     """Fachada que dispara notificacoes conforme a configuracao de cada regra."""
 
     def __init__(self, config, logger) -> None:
         self.email_notifier = EmailNotifier(config.smtp, logger)
         self.teams_notifier = TeamsNotifier(config.teams, logger)
+        self.telegram_notifier = TelegramNotifier(config.telegram, logger)
         self.logger = logger
 
-    def notify(self, payload: NotificationPayload, send_email: bool, send_teams: bool) -> None:
+    def notify(
+        self,
+        payload: NotificationPayload,
+        send_email: bool,
+        send_teams: bool,
+        send_telegram: bool = False,
+    ) -> None:
         """Dispara os canais habilitados para esta regra, sem interromper em caso de falha."""
         if send_email:
             try:
@@ -205,5 +282,10 @@ class NotificationService:
         if send_teams:
             try:
                 self.teams_notifier.send(payload)
+            except NotificationError:
+                pass
+        if send_telegram:
+            try:
+                self.telegram_notifier.send(payload)
             except NotificationError:
                 pass
