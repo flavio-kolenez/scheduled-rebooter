@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import datetime
 from typing import Optional
 
 from monitor_log import ActionType, LogMonitor, RuleMatch, get_rule_by_id, load_rules
 from notifications import NotificationPayload, NotificationService
-from services import HealthChecker, RecoveryOrchestrator, ServiceController, is_admin
+from services import HealthChecker, PlantaoChecker, RecoveryOrchestrator, RecoveryResult, ServiceController, is_admin
 from utils import (
     AppConfig,
     RecoveryHistory,
@@ -49,6 +50,7 @@ class WatchdogApp:
         self.controller = ServiceController()
         self.health_checker = HealthChecker(config)
         self.orchestrator = RecoveryOrchestrator(config, self.controller, self.health_checker, self.logger)
+        self.plantao_checker = PlantaoChecker(config, self.logger)
         self.notifications = NotificationService(config, self.logger)
         self.history = RecoveryHistory(config.history_csv_path)
         self.tracker = RecoveryTracker(config.last_recovery_file)
@@ -111,13 +113,50 @@ class WatchdogApp:
             self.logger.info("Backup do console.log criado em: %s", backup_path)
         cleanup_old_backups(self.config.backup_dir, self.config.backup_retention_days)
 
-        result = self.orchestrator.run(rule.action.value, simulate=self.config.simulate_mode, services=rule.services)
+        # Se QUALQUER grupo de atendimento responsavel por esta regra
+        # (plantao_grupos) estiver em modo de operacao "normal", ha tecnicos
+        # presentes na empresa: a recuperacao automatica e pulada e a
+        # ocorrencia e apenas notificada, para intervencao manual. Regras
+        # sem plantao_grupos definido nunca sao afetadas. NOTIFICAR ja nao
+        # executa recuperacao, entao a checagem e desnecessaria nesse caso.
+        skip_for_normal_mode = rule.action is not ActionType.NOTIFICAR and self.plantao_checker.is_normal_mode(
+            rule.plantao_grupos
+        )
+
+        if skip_for_normal_mode:
+            self.logger.warning(
+                "Modo de operacao 'normal' ativo: recuperacao automatica da regra '%s' foi pulada "
+                "(ha tecnicos na empresa para atuar manualmente).",
+                rule.rule_id,
+            )
+            now = time.time()
+            result = RecoveryResult(
+                True,
+                rule.action.value,
+                now,
+                now,
+                "Recuperacao automatica pulada: modo de operacao 'normal' ativo.",
+            )
+        else:
+            result = self.orchestrator.run(
+                rule.action.value, simulate=self.config.simulate_mode, services=rule.services
+            )
         self.tracker.register_recovery(rule.rule_id)
 
-        if rule.action is ActionType.NOTIFICAR:
+        if skip_for_normal_mode or rule.action is ActionType.NOTIFICAR:
             result_text = "ALERTA"
         else:
             result_text = "SUCESSO" if result.success else "FALHA"
+
+        # Sempre que uma acao automatica de recuperacao de verdade for executada
+        # (RESTART_SCHEDULE/RESTART_SERVICE_GROUP, fora do modo 'normal'), o time
+        # de plantao precisa ser avisado imediatamente via Teams/Telegram, pois
+        # nao ha garantia de que alguem esteja acompanhando os logs em tempo real.
+        executed_auto_recovery = not skip_for_normal_mode and rule.action in (
+            ActionType.RESTART_SCHEDULE,
+            ActionType.RESTART_SERVICE_GROUP,
+        )
+
         self.history.append(
             environment=self.config.environment,
             server=self.config.server_name,
@@ -137,8 +176,17 @@ class WatchdogApp:
             action=rule.action.value,
             recovery_seconds=result.duration_seconds,
             result=result_text,
+            steps=result.steps,
         )
-        self.notifications.notify(payload, rule.send_email, rule.send_teams, rule.send_telegram)
+        # No modo 'normal' (pula recuperacao) ou sempre que uma recuperacao
+        # automatica de verdade for executada, Teams e Telegram sao sempre
+        # notificados (mesmo que a regra normalmente nao envie).
+        self.notifications.notify(
+            payload,
+            rule.send_email,
+            rule.send_teams or skip_for_normal_mode or executed_auto_recovery,
+            rule.send_telegram or skip_for_normal_mode or executed_auto_recovery,
+        )
 
         self.logger.info("Recuperacao finalizada. Resultado=%s Duracao=%.1fs", result_text, result.duration_seconds)
         return 0 if result.success else 2

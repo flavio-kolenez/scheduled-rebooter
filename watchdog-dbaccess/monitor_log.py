@@ -53,6 +53,7 @@ class Rule:
     only_log: bool
     auto_execute: bool
     services: list[str] = field(default_factory=list)
+    plantao_grupos: list[str] = field(default_factory=list)
 
     def matches(self, line: str) -> bool:
         """Retorna True se a linha corresponder ao padrao da regra."""
@@ -112,6 +113,7 @@ def load_rules(config: AppConfig) -> list[Rule]:
                 only_log=section.getboolean("only_log", fallback=False),
                 auto_execute=section.getboolean("auto_execute", fallback=False),
                 services=rule_services,
+                plantao_grupos=split_csv_list(section.get("plantao_grupos", "")),
             )
         )
 

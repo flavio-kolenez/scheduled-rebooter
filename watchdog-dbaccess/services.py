@@ -7,13 +7,14 @@ e o fluxo completo de parada/inicializacao dos servicos do TOTVS Protheus.
 from __future__ import annotations
 
 import ctypes
+import json
 import re
 import socket
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from utils import AppConfig
@@ -143,6 +144,95 @@ class HealthChecker:
             return False
 
 
+class PlantaoChecker:
+    """Consulta o endpoint que informa o modo de operacao atual (normal ou
+    plantao) de cada grupo de atendimento.
+
+    O endpoint e chamado uma unica vez por execucao e retorna o modo de
+    operacao de TODOS os grupos de atendimento numa unica resposta, na
+    chave "grupos" (dicionario ``{grupo_id: modo_operacao}``). Cada regra
+    do config.ini pode ser associada a um ou mais grupos atraves da chave
+    ``plantao_grupos`` (lista separada por virgula); regras sem essa chave
+    (lista vazia) nunca sao "gated" por este recurso e a recuperacao
+    automatica funciona sempre normalmente para elas.
+
+    Quando QUALQUER UM dos grupos responsaveis por uma regra estiver em
+    modo "normal", ha tecnicos presentes na empresa capazes de atuar
+    manualmente: a recuperacao automatica da regra e pulada (apenas
+    notificar). Somente quando TODOS os grupos responsaveis estiverem em
+    modo "Plantao" (ninguem presencial em nenhum deles) a recuperacao
+    automatica e executada normalmente.
+
+    Resposta esperada do endpoint:
+        {"status": "ok", "message": "...", "grupos": {"1": "normal", "2": "Plantao"}}
+    """
+
+    def __init__(self, config: AppConfig, logger) -> None:
+        self.config = config
+        self.logger = logger
+        self._grupos_cache: Optional[dict[str, str]] = None
+
+    def _fetch_grupos(self) -> dict[str, str]:
+        """Consulta o endpoint uma unica vez por execucao e cacheia o resultado."""
+        if self._grupos_cache is not None:
+            return self._grupos_cache
+
+        plantao = self.config.plantao
+        if not plantao.enabled or not plantao.url:
+            self._grupos_cache = {}
+            return self._grupos_cache
+
+        try:
+            with urllib.request.urlopen(plantao.url, timeout=plantao.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            self.logger.warning(
+                "Falha ao consultar o endpoint de plantao (%s). Assumindo modo 'Plantao' "
+                "para todos os grupos (recuperacao automatica habilitada).", exc
+            )
+            self._grupos_cache = {}
+            return self._grupos_cache
+
+        grupos_raw = data.get("grupos", {})
+        grupos: dict[str, str] = {}
+        if isinstance(grupos_raw, dict):
+            for grupo_id, modo in grupos_raw.items():
+                grupos[str(grupo_id).strip()] = str(modo).strip().lower()
+        elif isinstance(grupos_raw, list):
+            for item in grupos_raw:
+                if isinstance(item, dict) and "grupo" in item:
+                    grupos[str(item["grupo"]).strip()] = str(item.get("modo_operacao", "")).strip().lower()
+
+        self._grupos_cache = grupos
+        return grupos
+
+    def is_normal_mode(self, grupos: list[str]) -> bool:
+        """Retorna True se ALGUM dos grupos de atendimento informados estiver em modo "normal".
+
+        Regras sem grupos definidos (lista vazia) nunca sao "gated":
+        retorna sempre False (recuperacao automatica funciona
+        normalmente). Em caso de falha na consulta, ou se nenhum dos
+        grupos aparecer na resposta do endpoint, tambem retorna False,
+        priorizando a recuperacao automatica.
+        """
+        grupos = [g.strip() for g in grupos if g and g.strip()]
+        if not grupos:
+            return False
+
+        grupos_status = self._fetch_grupos()
+        return any(grupos_status.get(grupo) == "normal" for grupo in grupos)
+
+
+@dataclass
+class ServiceStepResult:
+    """Resultado de um unico passo (parar/iniciar) de um servico durante a recuperacao."""
+
+    service: str
+    operation: str  # "parar" | "iniciar"
+    success: bool
+    error: str = ""
+
+
 @dataclass
 class RecoveryResult:
     """Resultado consolidado de uma execucao de recuperacao."""
@@ -152,6 +242,7 @@ class RecoveryResult:
     started_at: float
     finished_at: float
     message: str
+    steps: list[ServiceStepResult] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -174,27 +265,44 @@ class RecoveryOrchestrator:
         self.health_checker = health_checker
         self.logger = logger
         self.on_step = on_step or (lambda message: None)
+        self._steps: list[ServiceStepResult] = []
 
     def _log(self, message: str) -> None:
         self.logger.info(message)
         self.on_step(message)
 
+    def _record_step(self, service: str, operation: str, action: Callable[[], None]) -> None:
+        """Executa a acao (parar/iniciar) de um servico, registrando o resultado do passo.
+
+        Em caso de falha, o passo e registrado como malsucedido e a excecao e
+        relancada (mantendo o comportamento de interromper a recuperacao no
+        primeiro erro).
+        """
+        try:
+            action()
+        except ServiceError as exc:
+            self._steps.append(ServiceStepResult(service=service, operation=operation, success=False, error=str(exc)))
+            raise
+        self._steps.append(ServiceStepResult(service=service, operation=operation, success=True))
+
     def stop_schedules(self) -> None:
         """Para os servicos Schedule na ordem inversa (do maior indice para o Broker)."""
         for service in self.config.schedule_services_shutdown_order:
             self._log(f"Parando servico Schedule: {service}")
-            self.controller.stop(service)
+            self._record_step(service, "parar", lambda service=service: self.controller.stop(service))
 
     def start_schedules(self) -> None:
         """Inicia os servicos Schedule na ordem crescente (do Broker para o maior indice)."""
         for service in reversed(self.config.schedule_services_shutdown_order):
             self._log(f"Iniciando servico Schedule: {service}")
-            self.controller.start(service)
+            self._record_step(service, "iniciar", lambda service=service: self.controller.start(service))
 
     def restart_dbaccess(self) -> None:
         """Para o DBAccess, aguarda o tempo configurado e o inicia novamente."""
         self._log(f"Parando DBAccess: {self.config.dbaccess_service}")
-        self.controller.stop(self.config.dbaccess_service)
+        self._record_step(
+            self.config.dbaccess_service, "parar", lambda: self.controller.stop(self.config.dbaccess_service)
+        )
 
         wait_seconds = self.config.service_stop_wait_seconds
         if wait_seconds > 0:
@@ -202,19 +310,21 @@ class RecoveryOrchestrator:
             time.sleep(wait_seconds)
 
         self._log(f"Iniciando DBAccess: {self.config.dbaccess_service}")
-        self.controller.start(self.config.dbaccess_service)
+        self._record_step(
+            self.config.dbaccess_service, "iniciar", lambda: self.controller.start(self.config.dbaccess_service)
+        )
 
     def stop_service_group(self, services: list[str]) -> None:
         """Para uma lista customizada de servicos, na ordem informada."""
         for service in services:
             self._log(f"Parando servico: {service}")
-            self.controller.stop(service)
+            self._record_step(service, "parar", lambda service=service: self.controller.stop(service))
 
     def start_service_group(self, services: list[str]) -> None:
         """Inicia uma lista customizada de servicos, na ordem inversa da informada."""
         for service in reversed(services):
             self._log(f"Iniciando servico: {service}")
-            self.controller.start(service)
+            self._record_step(service, "iniciar", lambda service=service: self.controller.start(service))
 
     def restart_service_group(self, services: list[str]) -> None:
         """Para e reinicia um grupo customizado de servicos (usado por regras especificas)."""
@@ -250,6 +360,7 @@ class RecoveryOrchestrator:
                 ``RESTART_SERVICE_GROUP``. Ignorada pelas demais acoes.
         """
         started_at = time.time()
+        self._steps = []
         try:
             if simulate:
                 self._log(f"[SIMULACAO] Acao '{action}' nao sera executada de fato.")
@@ -293,8 +404,10 @@ class RecoveryOrchestrator:
                 raise ServiceError("Health Check falhou apos a recuperacao.")
 
             finished_at = time.time()
-            return RecoveryResult(True, action, started_at, finished_at, "Recuperacao concluida com sucesso.")
+            return RecoveryResult(
+                True, action, started_at, finished_at, "Recuperacao concluida com sucesso.", list(self._steps)
+            )
         except ServiceError as exc:
             finished_at = time.time()
             self.logger.error("Falha na recuperacao: %s", exc)
-            return RecoveryResult(False, action, started_at, finished_at, str(exc))
+            return RecoveryResult(False, action, started_at, finished_at, str(exc), list(self._steps))

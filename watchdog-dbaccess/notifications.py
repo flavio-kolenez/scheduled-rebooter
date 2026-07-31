@@ -10,9 +10,10 @@ import json
 import smtplib
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.message import EmailMessage
 
+from services import ServiceStepResult
 from utils import SmtpConfig, TeamsConfig, TelegramConfig
 
 
@@ -32,21 +33,50 @@ class NotificationPayload:
     action: str
     recovery_seconds: float
     result: str
+    steps: list[ServiceStepResult] = field(default_factory=list)
 
     def subject(self) -> str:
         return f"[WatchDog DBAccess] {self.result.upper()} - {self.environment} - {self.rule_description}"
 
+    def status_final(self) -> str:
+        """Frase de status final da operacao, para exibir ao time de plantao."""
+        result_upper = self.result.upper()
+        if result_upper == "SUCESSO":
+            return "Recuperacao concluida com sucesso."
+        if result_upper == "FALHA":
+            return "Recuperacao concluida com falhas."
+        return "Alerta: nenhuma recuperacao automatica foi executada."
+
+    def format_steps(self, line_break: str = "\n") -> str:
+        """Formata a lista de servicos parados/iniciados, na ordem em que ocorreram."""
+        if not self.steps:
+            return ""
+        lines = []
+        for step in self.steps:
+            icon = "✅" if step.success else "❌"
+            operacao = "Parar" if step.operation == "parar" else "Iniciar"
+            line = f"{icon} {operacao}: {step.service}"
+            if not step.success and step.error:
+                line += f" — {step.error}"
+            lines.append(line)
+        return line_break.join(lines)
+
     def body_text(self) -> str:
-        return (
-            f"Ambiente: {self.environment}\n"
-            f"Servidor: {self.server}\n"
-            f"Data/Hora: {self.timestamp}\n"
-            f"Regra acionada: {self.rule_description}\n"
-            f"Erro identificado: {self.error_line}\n"
-            f"Acao executada: {self.action}\n"
-            f"Tempo de recuperacao: {self.recovery_seconds:.1f}s\n"
-            f"Resultado: {self.result}\n"
-        )
+        lines = [
+            f"Ambiente: {self.environment}",
+            f"Servidor: {self.server}",
+            f"Data/Hora: {self.timestamp}",
+            f"Regra acionada: {self.rule_description}",
+            f"Erro identificado: {self.error_line}",
+            f"Acao executada: {self.action}",
+        ]
+        if self.steps:
+            lines.append("Servicos afetados (na ordem em que ocorreram):")
+            lines.append(self.format_steps())
+        lines.append(f"Tempo de recuperacao: {self.recovery_seconds:.1f}s")
+        lines.append(f"Resultado: {self.result}")
+        lines.append(f"Status final: {self.status_final()}")
+        return "\n".join(lines) + "\n"
 
 
 class EmailNotifier:
@@ -103,7 +133,18 @@ class TeamsNotifier:
         elif is_success:
             emoji, color = "✅", "Good"
         else:
-            emoji, color = "⚠️", "Attention"
+            emoji, color = "❌", "Attention"
+
+        body_blocks: list[dict] = [
+            {
+                "type": "TextBlock",
+                "text": f"{emoji} WatchDog DBAccess - {payload.rule_description}",
+                "size": "Large",
+                "weight": "Bolder",
+                "color": color,
+                "wrap": True,
+            }
+        ]
 
         if is_alert:
             detail_text = (
@@ -121,13 +162,45 @@ class TeamsNotifier:
                 f"**Ambiente:** {payload.environment}  \n"
                 f"**Erro identificado:** {payload.error_line}  \n"
                 f"**Acao executada:** {payload.action}  \n"
-                f"**Resultado:** {payload.result}"
+                f"**Status final:** {payload.status_final()}"
             )
             facts = [
                 {"title": "Servidor", "value": payload.server},
                 {"title": "Data/Hora", "value": payload.timestamp},
                 {"title": "Tempo de recuperacao", "value": f"{payload.recovery_seconds:.1f}s"},
             ]
+
+        body_blocks.append(
+            {
+                "type": "TextBlock",
+                "text": detail_text,
+                "wrap": True,
+                "size": "Medium",
+            }
+        )
+
+        if payload.steps:
+            body_blocks.append(
+                {
+                    "type": "TextBlock",
+                    "text": (
+                        "**Servicos afetados (na ordem em que ocorreram):**  \n"
+                        f"{payload.format_steps(line_break='  \n')}"
+                    ),
+                    "wrap": True,
+                    "size": "Small",
+                    "spacing": "Medium",
+                }
+            )
+
+        body_blocks.append(
+            {
+                "type": "FactSet",
+                "separator": True,
+                "spacing": "Medium",
+                "facts": facts,
+            }
+        )
 
         return {
             "type": "message",
@@ -138,28 +211,7 @@ class TeamsNotifier:
                         "type": "AdaptiveCard",
                         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                         "version": "1.2",
-                        "body": [
-                            {
-                                "type": "TextBlock",
-                                "text": f"{emoji} WatchDog DBAccess - {payload.rule_description}",
-                                "size": "Large",
-                                "weight": "Bolder",
-                                "color": color,
-                                "wrap": True,
-                            },
-                            {
-                                "type": "TextBlock",
-                                "text": detail_text,
-                                "wrap": True,
-                                "size": "Medium",
-                            },
-                            {
-                                "type": "FactSet",
-                                "separator": True,
-                                "spacing": "Medium",
-                                "facts": facts,
-                            },
-                        ],
+                        "body": body_blocks,
                     },
                 }
             ],
@@ -206,21 +258,19 @@ class TelegramNotifier:
                 f"*Observacao:* nenhuma acao automatica foi executada. "
                 f"Verificacao manual recomendada."
             )
-        elif result_upper == "SUCESSO":
-            emoji = "✅"
-            detail = (
-                f"*Erro identificado:* {payload.error_line}\n"
-                f"*Acao executada:* {payload.action}\n"
-                f"*Resultado:* {payload.result}\n"
-                f"*Tempo de recuperacao:* {payload.recovery_seconds:.1f}s"
-            )
         else:
-            emoji = "⚠️"
+            emoji = "✅" if result_upper == "SUCESSO" else "❌"
             detail = (
                 f"*Erro identificado:* {payload.error_line}\n"
                 f"*Acao executada:* {payload.action}\n"
-                f"*Resultado:* {payload.result}\n"
-                f"*Tempo de recuperacao:* {payload.recovery_seconds:.1f}s"
+            )
+            if payload.steps:
+                detail += (
+                    f"*Servicos afetados (na ordem em que ocorreram):*\n{payload.format_steps()}\n"
+                )
+            detail += (
+                f"*Tempo de recuperacao:* {payload.recovery_seconds:.1f}s\n"
+                f"*Status final:* {payload.status_final()}"
             )
 
         return (

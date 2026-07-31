@@ -74,6 +74,15 @@ class HealthCheckConfig:
 
 
 @dataclass
+class PlantaoConfig:
+    """Configuracao da consulta ao endpoint de modo de operacao (plantao)."""
+
+    enabled: bool = False
+    url: str = ""
+    timeout_seconds: int = 10
+
+
+@dataclass
 class AppConfig:
     """Configuracao completa da aplicacao, carregada a partir do config.ini."""
 
@@ -96,6 +105,7 @@ class AppConfig:
     smtp: SmtpConfig
     teams: TeamsConfig
     telegram: TelegramConfig
+    plantao: PlantaoConfig
 
     log_dir: Path
     log_level: str
@@ -216,6 +226,7 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
     smtp_section = parser["smtp"] if parser.has_section("smtp") else {}
     teams_section = parser["teams"] if parser.has_section("teams") else {}
     telegram_section = parser["telegram"] if parser.has_section("telegram") else {}
+    plantao_section = parser["plantao"] if parser.has_section("plantao") else {}
 
     config = AppConfig(
         config_path=path,
@@ -256,6 +267,11 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
             enabled=_getboolean(telegram_section, "enabled", False),
             bot_token=_env("WATCHDOG_TELEGRAM_BOT_TOKEN", _get(telegram_section, "bot_token", "")),
             chat_id=_env("WATCHDOG_TELEGRAM_CHAT_ID", _get(telegram_section, "chat_id", "")),
+        ),
+        plantao=PlantaoConfig(
+            enabled=_getboolean(plantao_section, "enabled", False),
+            url=_get(plantao_section, "url", ""),
+            timeout_seconds=int(_get(plantao_section, "timeout_seconds", "10") or 10),
         ),
         log_dir=Path(logging_section.get("log_dir", "logs")),
         log_level=logging_section.get("log_level", "INFO").strip().upper(),
