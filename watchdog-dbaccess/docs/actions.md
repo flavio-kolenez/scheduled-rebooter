@@ -58,6 +58,10 @@ services =
     Servico_A,
     Servico_B,
     Servico_C
+
+; Opcional: associa a regra a um ou mais grupos de atendimento (ver secao
+; "Modo de operacao (Plantao)" abaixo). Se omitido, a regra nunca e afetada.
+plantao_grupos = 2, 3
 ```
 
 Campos que interagem com a ação escolhida:
@@ -65,6 +69,127 @@ Campos que interagem com a ação escolhida:
 - `only_log = true` força a regra a **apenas logar**, independente do valor de `action` (nunca chega a chamar `RecoveryOrchestrator.run()`) — **exceto** quando `action = NOTIFICAR`, que ignora essa flag (ver acima).
 - `auto_execute = false` faz a regra ser detectada e logada, mas a ação **não é executada de fato** (fica só sugerida no log) — **exceto** quando `action = NOTIFICAR`, que sempre executa (só a notificação, nunca uma recuperação real).
 - `general.simulate_mode = true` (seção `[general]`) faz **qualquer** ação apenas simular (loga "[SIMULACAO] Acao 'X' nao sera executada de fato") sem mexer em nenhum serviço — vale para todas as regras, é um interruptor global.
+- `plantao_grupos = <ids separados por virgula>` faz a regra ser **gated** pelo modo de operação de um ou mais grupos de atendimento — ver seção [Modo de operação (Plantão)](#modo-de-operação-plantão) abaixo. Não se aplica a `NOTIFICAR` (que já nunca executa recuperação).
+
+## Modo de operação (Plantão)
+
+Além de `only_log`/`auto_execute`/`simulate_mode`, uma regra pode ser "gated"
+por um recurso adicional: o **modo de operação** de um ou mais grupos de
+atendimento, consultado em tempo real via HTTP antes de executar a
+recuperação.
+
+**Onde vive no código:** `PlantaoChecker` em [`services.py`](../services.py),
+instanciado como `self.plantao_checker` em `WatchdogApp.__init__`
+([`monitor.py`](../monitor.py)) e consultado dentro de `_execute_recovery()`.
+
+**Configuração (`[plantao]` no `config.ini`):**
+
+```ini
+[plantao]
+enabled = true
+url = https://tars.buddemeyer.com.br/plantao/ws/ws_verificaPlantao.php
+timeout_seconds = 10
+```
+
+O endpoint é chamado **uma única vez por ciclo de verificação** (o resultado
+é cacheado em memória por `PlantaoChecker`) e deve retornar o modo de
+operação de **todos** os grupos de atendimento numa única resposta:
+
+```json
+{"status": "ok", "message": "...", "grupos": {"1": "normal", "2": "Plantao", "3": "Plantao"}}
+```
+
+Cada regra declara, opcionalmente, a chave `plantao_grupos` (lista de ids
+separados por vírgula) informando quais grupos são responsáveis por ela:
+
+```ini
+[rule:dbaccess_connection_lost]
+...
+action = RESTART_SERVICE_GROUP
+plantao_grupos = 2, 3
+```
+
+**Lógica (`PlantaoChecker.is_normal_mode(grupos)`):**
+
+- Regra **sem** `plantao_grupos` (lista vazia) → sempre retorna `False`. A
+  regra nunca é afetada; segue exatamente o comportamento configurado em
+  `only_log`/`auto_execute`.
+- Regra **com** `plantao_grupos` → se **qualquer** grupo da lista estiver em
+  modo `"normal"` na resposta do endpoint, retorna `True`: há técnico
+  presente de pelo menos um dos times responsáveis, então a recuperação
+  automática é **pulada** e a ocorrência é apenas **notificada** (Teams e
+  Telegram são forçados a `true` nesse caso, mesmo que a regra não os tenha
+  habilitado, pois é o único jeito de avisar o técnico presente).
+- Só quando **todos** os grupos da lista estiverem em modo `"Plantao"`
+  (ninguém presencial em nenhum deles) a recuperação automática roda
+  normalmente, com as notificações respeitando as flags normais da regra
+  (`send_email`/`send_teams`/`send_telegram`).
+- Falha ao consultar o endpoint (timeout, erro de rede, resposta inválida),
+  `[plantao].enabled = false`, ou grupo ausente na resposta → assume-se o
+  lado seguro ("Plantao"): a recuperação automática **não é bloqueada**.
+
+```mermaid
+flowchart TD
+    A["Regra confirmada, action != NOTIFICAR"] --> B{"plantao_grupos definido?"}
+    B -- não --> E["Executa a acao normalmente"]
+    B -- sim --> C["Consulta [plantao].url (uma vez por ciclo, cacheado)"]
+    C --> D{"Algum grupo da lista esta em modo 'normal'?"}
+    D -- sim --> F["Pula a acao. So notifica (Teams/Telegram forcados)"]
+    D -- não / falha na consulta --> E
+```
+
+## Notificações detalhadas de recuperação
+
+Sempre que uma recuperação automática **de verdade** é executada (ação
+`RESTART_SCHEDULE` ou `RESTART_SERVICE_GROUP`, fora do modo `normal` do
+Plantão), `_execute_recovery()` (em [monitor.py](../monitor.py)) força o
+envio da notificação por Teams e Telegram, mesmo que a regra tenha
+`send_teams`/`send_telegram` desabilitados:
+
+```python
+executed_auto_recovery = not skip_for_normal_mode and rule.action in (
+    ActionType.RESTART_SCHEDULE,
+    ActionType.RESTART_SERVICE_GROUP,
+)
+...
+self.notifications.notify(
+    payload,
+    rule.send_email,
+    rule.send_teams or skip_for_normal_mode or executed_auto_recovery,
+    rule.send_telegram or skip_for_normal_mode or executed_auto_recovery,
+)
+```
+
+Isso fecha uma lacuna: regras críticas (como `dbaccess_connection_lost`) que
+têm `send_teams = false`/sem `send_telegram` no `config.ini` (pensadas para
+não gerar ruído no dia a dia) agora avisam o time de plantão sempre que uma
+recuperação automática de verdade acontece.
+
+O detalhamento por serviço é rastreado em `RecoveryOrchestrator` via
+`ServiceStepResult` (`service`, `operation` — `"parar"`/`"iniciar"` —,
+`success`, `error`), acumulado em `RecoveryResult.steps` e repassado para
+`NotificationPayload.steps`. Isso preserva o comportamento fail-fast já
+existente (a recuperação aborta na primeira falha de serviço), mas agora
+mantém um registro de quais serviços já haviam sido processados até esse
+ponto.
+
+`NotificationPayload.format_steps()` monta a lista ordenada de serviços
+(reaproveitada por e-mail, Teams e Telegram) e `status_final()` monta o
+texto do status consolidado. A mensagem final inclui:
+
+- Data/hora, ambiente e servidor (hostname).
+- Erro identificado e ação executada.
+- Lista ordenada dos serviços afetados, cada um com ✅ (sucesso) ou ❌ (falha).
+- Tempo total de recuperação.
+- Status final consolidado.
+
+Legenda de emojis:
+
+| Emoji | Categoria | Significado |
+|---|---|---|
+| ✅ | Sucesso | Operação/recuperação concluída com sucesso |
+| ❌ | Erro | Operação/recuperação falhou |
+| 🔔 | Alerta | Nenhuma recuperação automática foi executada (modo `normal` do Plantão ou ação `NOTIFICAR`) |
 
 ## Como criar uma ação nova
 

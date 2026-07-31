@@ -35,7 +35,12 @@ Edite [config.ini](config.ini):
 - `services.dbaccess_service` e `services.schedule_services`: nomes exatos
   dos serviços Windows.
 - `[rule:*]`: ajuste ou crie regras (regex, severidade, ação, notificações).
-- `[smtp]` / `[teams]`: credenciais reais, se quiser notificações.
+- `[smtp]` / `[teams]` / `[telegram]`: credenciais reais, se quiser notificações
+  (segredos como senha/webhook/token devem ir no `.env`, não no `config.ini` —
+  veja `.env.example`).
+- `[plantao]`: endpoint que informa se cada grupo de atendimento está em modo
+  "normal" (técnicos presentes) ou "Plantão". Veja a seção
+  [Modo de operação (Plantão)](#modo-de-operação-plantão) abaixo.
 - `general.simulate_mode = true`: use isso enquanto estiver testando, para
   não mexer nos serviços de verdade.
 
@@ -118,7 +123,7 @@ cada 30s/1min). Garanta que `config.ini` esteja na mesma pasta do `.exe`.
 | [utils.py](utils.py) | Lê `config.ini`, configura logging rotativo, controla o lock (`status.lock`), grava histórico CSV, controla intervalo mínimo entre recuperações, faz backup/limpeza do log |
 | [monitor_log.py](monitor_log.py) | Lê as últimas N linhas do log (`deque`), carrega as regras `[rule:*]` do `config.ini`, testa regex contra as linhas, confirma o erro relendo depois de alguns segundos |
 | [services.py](services.py) | Fala com o Windows via `sc.exe` (parar/iniciar/consultar serviço), faz o Health Check (TCP/HTTP) e executa o fluxo completo de recuperação (`RecoveryOrchestrator`) |
-| [notifications.py](notifications.py) | Monta e envia e-mail (SMTP) e cartão do Teams (Webhook) |
+| [notifications.py](notifications.py) | Monta e envia e-mail (SMTP), cartão do Teams (Webhook) e mensagem do Telegram, incluindo o detalhamento por serviço (veja [Notificações detalhadas de recuperação](#notificações-detalhadas-de-recuperação)) |
 | [monitor.py](monitor.py) | Ponto de entrada / CLI. Classe `WatchdogApp` amarra tudo: monitor → regras → recuperação → histórico → notificação |
 
 ## Fluxo do `--check` (uso principal)
@@ -142,17 +147,20 @@ flowchart TD
     J -- nao --> J1["Loga bloqueio e encerra"]
     J -- sim --> K["Cria status.lock"]
     K --> L["Backup do console.log + limpeza de backups antigos"]
-    L --> M["RecoveryOrchestrator executa a ACAO da regra"]
+    L --> L2{"Regra tem plantao_grupos E algum desses grupos esta em modo 'normal'?"}
+    L2 -- sim --> L3["Pula a acao: so notifica (Teams/Telegram forcados, mesmo se a regra nao pediu)"]
+    L2 -- nao / sem plantao_grupos --> M["RecoveryOrchestrator executa a ACAO da regra"]
     M --> M1["RESTART_SCHEDULE: para e reinicia os Schedules (ordem de [services].schedule_services)"]
     M --> M2["RESTART_SERVICE_GROUP: para na ordem da regra ('services') -> aguarda -> inicia na ordem inversa"]
     M --> M3["SOMENTE_LOG: registra no log, nenhuma acao de recuperacao"]
-    M --> M4["NOTIFICAR: dispara notificacoes (email/Teams) sem executar recuperacao"]
+    M --> M4["NOTIFICAR: dispara notificacoes (email/Teams/Telegram) sem executar recuperacao"]
     M1 --> N["Health Check (se habilitado)"]
     M2 --> N
     M3 --> N
     M4 --> N
+    L3 --> O
     N --> O["Registra no history.csv e no last_recovery.json"]
-    O --> P["Envia notificacoes (email/Teams) se a regra pedir"]
+    O --> P["Envia notificacoes (email/Teams/Telegram) se a regra pedir (ou se plantao forcou)"]
     P --> Q["Remove status.lock"]
     Q --> R["Fim"]
 ```
@@ -161,6 +169,77 @@ Os comandos `--restart`, `--status` e `--test-rule` reaproveitam essas mesmas
 peças (`RecoveryOrchestrator`, `RecoveryHistory`, `NotificationService`), só
 entrando no fluxo por um caminho diferente — sem depender de encontrar um
 erro no log de verdade.
+
+## Modo de operação (Plantão)
+
+Algumas regras (`RESTART_SCHEDULE`, `RESTART_SERVICE_GROUP`) podem ser
+associadas a um ou mais **grupos de atendimento** através da chave
+`plantao_grupos` (lista separada por vírgula, ex.: `plantao_grupos = 2, 3`).
+Antes de executar a recuperação automática dessas regras, o WatchDog
+consulta o endpoint configurado em `[plantao].url`, que retorna o modo de
+operação **de todos os grupos** numa única resposta:
+
+```json
+{"status": "ok", "message": "...", "grupos": {"1": "normal", "2": "Plantao", "3": "Plantao"}}
+```
+
+Regras:
+
+- Se **algum** dos grupos listados em `plantao_grupos` estiver em modo
+  `"normal"` (técnico presente na empresa), a recuperação automática é
+  **pulada** e a ocorrência é apenas **notificada** (Teams e Telegram são
+  sempre notificados nesse caso, mesmo que a regra não os tenha habilitado),
+  para que a intervenção seja feita manualmente.
+- Se **todos** os grupos listados estiverem em modo `"Plantao"` (ninguém
+  presencial), a recuperação automática roda normalmente.
+- Regras **sem** `plantao_grupos` definido nunca são afetadas por este
+  recurso — o comportamento configurado (`only_log`/`auto_execute`/etc.)
+  funciona como se o recurso estivesse desligado.
+- Se a consulta ao endpoint falhar (timeout, erro de rede, resposta
+  inválida) ou `[plantao].enabled = false`, assume-se o lado seguro: a
+  recuperação automática **não é bloqueada**.
+- A ação `NOTIFICAR` nunca é afetada por este recurso (ela já nunca executa
+  recuperação, independente do modo de operação).
+
+Veja `PlantaoChecker` em [services.py](services.py) para a implementação.
+
+## Notificações detalhadas de recuperação
+
+Sempre que uma recuperação automática **de verdade** é executada (ação
+`RESTART_SCHEDULE` ou `RESTART_SERVICE_GROUP`, fora do modo `normal` do
+Plantão), o WatchDog **força** o envio da notificação por Teams e Telegram —
+mesmo que a regra tenha `send_teams`/`send_telegram` desabilitados no
+`config.ini`. A ideia é garantir que o time de plantão sempre saiba quando o
+ambiente sofreu uma ação automática, sem depender de ninguém acompanhar o
+log em tempo real.
+
+A mensagem enviada (e-mail, Teams e Telegram reaproveitam os mesmos dados de
+`NotificationPayload`) inclui:
+
+- Data/hora, ambiente e servidor (hostname) onde o WatchDog rodou.
+- O erro identificado (linha do log que disparou a regra) e a ação executada.
+- **Lista ordenada dos serviços afetados**, na ordem em que as operações
+  realmente ocorreram (parar/iniciar), cada um marcado com sucesso ou falha
+  — inclusive quando a recuperação para no meio do caminho por causa de uma
+  falha (fail-fast: os serviços já processados aparecem, os que nem chegaram
+  a ser tentados não aparecem na lista).
+- Tempo total de recuperação.
+- Status final consolidado.
+
+Legenda de emojis (usada tanto no card do Teams quanto na mensagem do
+Telegram):
+
+| Emoji | Categoria | Significado |
+|---|---|---|
+| ✅ | Sucesso | Operação/recuperação concluída com sucesso |
+| ❌ | Erro | Operação/recuperação falhou |
+| 🔔 | Alerta | Nenhuma recuperação automática foi executada (modo `normal` do Plantão ou ação `NOTIFICAR`) — verificação manual recomendada |
+
+Veja `ServiceStepResult` e `RecoveryResult.steps` em [services.py](services.py)
+(rastreamento de cada operação de parar/iniciar) e `NotificationPayload.steps`,
+`format_steps()`/`status_final()` em [notifications.py](notifications.py)
+(montagem da lista formatada e do status final reutilizados por e-mail,
+Teams e Telegram).
 
 ## Ação `RESTART_SERVICE_GROUP`
 
