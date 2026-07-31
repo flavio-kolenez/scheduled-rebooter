@@ -1,6 +1,6 @@
-# Schedule Rebooter
+# Schedule Rebooter - Descontinuado
 
-Ferramenta de linha de comando para reinicializar os serviços **TOTVS Protheus Schedule** em ordem controlada e sequencial, sem necessidade de Python instalado no servidor.
+Ferramenta de linha de comando para reinicializar os serviços **TOTVS Protheus Schedule** em ordem controlada e sequencial, sem necessidade de Python instalado no servidor. Substituido pelo WatchDog-dbaccess.
 
 ---
 
